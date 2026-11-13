@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel ESP32</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #e3e6ec;
+    --temp: #e2603b; --hum: #2f7fd8; --st: #b5539c; --air: #2e9e6b; --warn: #c9821c; --bad: #d23c3c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --text: #e8ebf1; --muted: #9098a9; --line: #2b313d;
+      --temp: #ff7d57; --hum: #5aa2f2; --st: #d77cc0; --air: #4cc58f; --warn: #e6a23c; --bad: #ff6464;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 40px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; justify-content: space-between; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text);
+    padding: 8px 14px; border-radius: 8px; cursor: pointer; }
+  button.primary { background: var(--hum); border-color: var(--hum); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--air); box-shadow: 0 0 0 3px color-mix(in srgb, var(--air) 25%, transparent); }
+  .dot.demo { background: var(--warn); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .label { color: var(--muted); font-size: 13px; display: flex; justify-content: space-between; }
+  .value { font-size: 40px; font-weight: 700; letter-spacing: -0.5px; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+  .value small { font-size: 18px; font-weight: 500; color: var(--muted); margin-left: 3px; }
+  .minmax { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  canvas { width: 100%; height: 70px; display: block; margin-top: 10px; }
+  .err { color: var(--bad); font-size: 13px; font-weight: 600; min-height: 1em; }
+  .details { margin-top: 14px; display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .details { grid-template-columns: 1fr; } }
+  .big canvas { height: 200px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  pre { margin: 0; max-height: 180px; overflow: auto; font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-all; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .banner { display: none; background: color-mix(in srgb, var(--bad) 12%, var(--card)); border: 1px solid var(--bad);
+    color: var(--text); padding: 12px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Panel ESP32 · DHT22 + MQ-135</h1>
+      <div class="sub">Lectura en vivo por USB (115200 baudios)</div>
+    </div>
+    <div class="actions">
+      <span class="status"><span class="dot" id="dot"></span><span id="statusText">Desconectado</span></span>
+      <button class="primary" id="btnConnect">Conectar placa</button>
+      <button id="btnDemo">Modo demo</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner"></div>
+
+  <section class="grid">
+    <div class="card">
+      <div class="label"><span>Temperatura</span><span>°C</span></div>
+      <div class="value" id="vTemp">--<small>°C</small></div>
+      <div class="minmax" id="mTemp">mín -- · máx --</div>
+      <div class="err" id="eDht"></div>
+      <canvas id="cTemp"></canvas>
+    </div>
+    <div class="card">
+      <div class="label"><span>Humedad</span><span>%</span></div>
+      <div class="value" id="vHum">--<small>%</small></div>
+      <div class="minmax" id="mHum">mín -- · máx --</div>
+      <canvas id="cHum"></canvas>
+    </div>
+    <div class="card">
+      <div class="label"><span>Sensación térmica</span><span>°C</span></div>
+      <div class="value" id="vSt">--<small>°C</small></div>
+      <div class="minmax" id="mSt">mín -- · máx --</div>
+      <canvas id="cSt"></canvas>
+    </div>
+    <div class="card">
+      <div class="label"><span>Calidad del aire (MQ-135)</span><span>ppm aprox.</span></div>
+      <div class="value" id="vPpm">--<small>ppm</small></div>
+      <div class="minmax" id="mPpm">mín -- · máx --</div>
+      <canvas id="cPpm"></canvas>
+    </div>
+  </section>
+
+  <section class="details">
+    <div class="card big">
+      <h2>Últimos minutos</h2>
+      <canvas id="cAll"></canvas>
+      <div class="note" id="legend"></div>
+    </div>
+    <div class="card">
+      <h2>Detalle MQ-135</h2>
+      <div class="kv">
+        <span>Voltaje</span><span id="dV">--</span>
+        <span>Rs</span><span id="dRs">--</span>
+        <span>R0 (calib.)</span><span id="dR0">--</span>
+        <span>Lecturas</span><span id="dN">0</span>
+        <span>Última</span><span id="dLast">--</span>
+      </div>
+      <div class="note">Las ppm del MQ-135 son aproximadas hasta que el sensor esté estabilizado (varias horas encendido) y calibrado.</div>
+      <h2 style="margin-top:14px">Monitor serie</h2>
+      <pre id="log"></pre>
+    </div>
+  </section>
+</main>
+
+<script>
+const MAX = 300; // puntos guardados (~5 min a 1 lectura/s)
+const series = { temp: [], hum: [], st: [], ppm: [] };
+const stats = { temp: {}, hum: {}, st: {}, ppm: {} };
+let count = 0, port = null, reader = null, demoTimer = null, keepReading = false;
+
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const colors = () => ({ temp: css('--temp'), hum: css('--hum'), st: css('--st'), ppm: css('--air'), line: css('--line'), muted: css('--muted') });
+
+function setStatus(text, cls) { $('statusText').textContent = text; $('dot').className = 'dot ' + (cls || ''); }
+function banner(msg) { const b = $('banner'); b.style.display = msg ? 'block' : 'none'; b.textContent = msg || ''; }
+
+function log(line) {
+  const el = $('log');
+  el.textContent += line + '\n';
+  const lines = el.textContent.split('\n');
+  if (lines.length > 200) el.textContent = lines.slice(-200).join('\n');
+  el.scrollTop = el.scrollHeight;
+}
+
+const num = (re, s) => { const m = s.match(re); return m ? parseFloat(m[1]) : null; };
+
+function handleLine(raw) {
+  const line = raw.replace(/\r/g, '').trim();
+  if (!line) return;
+  log(line);
+  if (!/MQ135|Temp:|DHT22/.test(line)) return;
+
+  const d = {
+    temp: num(/Temp:\s*(-?[\d.]+)/, line),
+    hum:  num(/Hum:\s*(-?[\d.]+)/, line),
+    st:   num(/ST:\s*(-?[\d.]+)/, line),
+    ppm:  num(/ppm~?:\s*(-?[\d.]+)/, line),
+    v:    num(/MQ135:\s*(-?[\d.]+)\s*V/, line),
+    rs:   num(/Rs:\s*(-?[\d.]+)/, line),
+    r0:   num(/R0[^:]*:\s*(-?[\d.]+)/, line),
+  };
+  const dhtErr = /DHT22:\s*error/i.test(line);
+  $('eDht').textContent = dhtErr ? 'DHT22 sin lectura: revisa el cableado' : '';
+
+  count++;
+  for (const k of ['temp', 'hum', 'st', 'ppm']) {
+    const val = (dhtErr && k !== 'ppm') ? null : d[k];
+    series[k].push(val);
+    if (series[k].length > MAX) series[k].shift();
+    if (val != null) {
+      const s = stats[k];
+      s.min = s.min == null ? val : Math.min(s.min, val);
+      s.max = s.max == null ? val : Math.max(s.max, val);
+    }
+  }
+  render(d, dhtErr);
+}
+
+function fmt(v, dec = 1) { return v == null ? '--' : v.toFixed(dec); }
+
+function render(d, dhtErr) {
+  const unit = { temp: '°C', hum: '%', st: '°C', ppm: 'ppm' };
+  const ids = { temp: 'Temp', hum: 'Hum', st: 'St', ppm: 'Ppm' };
+  for (const k in ids) {
+    const last = series[k][series[k].length - 1];
+    const dec = k === 'ppm' ? 0 : 1;
+    $('v' + ids[k]).innerHTML = fmt(last, dec) + '<small>' + unit[k] + '</small>';
+    $('m' + ids[k]).textContent = 'mín ' + fmt(stats[k].min, dec) + ' · máx ' + fmt(stats[k].max, dec);
+  }
+  $('dV').textContent = d.v == null ? '--' : d.v.toFixed(2) + ' V';
+  $('dRs').textContent = d.rs == null ? '--' : d.rs.toFixed(1) + ' kΩ';
+  $('dR0').textContent = d.r0 == null ? '--' : d.r0.toFixed(1) + ' kΩ';
+  $('dN').textContent = count;
+  $('dLast').textContent = new Date().toLocaleTimeString();
+  drawAll();
+}
+
+function setupCanvas(c) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+
+function line(ctx, data, w, h, color, lo, hi, pad = 4, fill = true) {
+  const n = data.length;
+  if (n < 2) return;
+  const span = hi - lo || 1;
+  const win = Math.max(n, 60); // ventana visible: al menos 60 lecturas; la derecha es "ahora"
+  const offset = w - ((n - 1) / (win - 1)) * w;
+  const X = i => offset + (i / (win - 1)) * w;
+  const Y = v => h - pad - ((v - lo) / span) * (h - pad * 2);
+  ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  let started = false, firstX = null, lastX = null;
+  data.forEach((v, i) => {
+    if (v == null) { started = false; return; }
+    if (!started) { ctx.moveTo(X(i), Y(v)); started = true; if (firstX == null) firstX = X(i); }
+    else ctx.lineTo(X(i), Y(v));
+    lastX = X(i);
+  });
+  ctx.stroke();
+  if (fill && firstX != null) {
+    ctx.lineTo(lastX, h); ctx.lineTo(firstX, h); ctx.closePath();
+    ctx.globalAlpha = 0.12; ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1;
+  }
+}
+
+function range(arr) {
+  const v = arr.filter(x => x != null);
+  if (!v.length) return [0, 1];
+  let lo = Math.min(...v), hi = Math.max(...v);
+  if (hi - lo < 1) { const m = (hi + lo) / 2; lo = m - 0.5; hi = m + 0.5; }
+  const p = (hi - lo) * 0.15;
+  return [lo - p, hi + p];
+}
+
+function drawSpark(id, key) {
+  const { ctx, w, h } = setupCanvas($(id));
+  const [lo, hi] = range(series[key]);
+  line(ctx, series[key], w, h, colors()[key], lo, hi);
+}
+
+function drawAll() {
+  drawSpark('cTemp', 'temp'); drawSpark('cHum', 'hum'); drawSpark('cSt', 'st'); drawSpark('cPpm', 'ppm');
+  const { ctx, w, h } = setupCanvas($('cAll'));
+  const c = colors();
+  ctx.strokeStyle = c.line; ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) { const y = (h / 4) * i; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  // Cada serie normalizada a su propio rango para comparar tendencias
+  for (const k of ['temp', 'hum', 'st', 'ppm']) { const [lo, hi] = range(series[k]); line(ctx, series[k], w, h, c[k], lo, hi, 10, false); }
+  $('legend').innerHTML =
+    '<span style="color:' + c.temp + '">■</span> Temperatura &nbsp; ' +
+    '<span style="color:' + c.hum + '">■</span> Humedad &nbsp; ' +
+    '<span style="color:' + c.st + '">■</span> Sensación térmica &nbsp; ' +
+    '<span style="color:' + c.ppm + '">■</span> Aire (ppm) — cada línea en su propia escala, para ver tendencias.';
+}
+
+async function connect() {
+  if (!('serial' in navigator)) {
+    banner('Este navegador no permite conectar con la placa. Abre esta página en Google Chrome o Microsoft Edge en el ordenador.');
+    return;
+  }
+  stopDemo();
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+  } catch (e) {
+    if (e && e.name === 'NotFoundError') return; // el usuario canceló
+    banner('No se pudo abrir el puerto: ' + e.message + '. Cierra el Monitor Serie de Arduino u otro programa que esté usando la placa y vuelve a intentarlo.');
+    port = null; return;
+  }
+  banner('');
+  setStatus('Conectado', 'on');
+  $('btnConnect').textContent = 'Desconectar';
+  keepReading = true;
+  readLoop();
+}
+
+async function readLoop() {
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (port && port.readable && keepReading) {
+    reader = port.readable.getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) { handleLine(buf.slice(0, i)); buf = buf.slice(i + 1); }
+      }
+    } catch (e) {
+      if (keepReading) banner('Se perdió la conexión con la placa (' + e.message + '). ¿Se desconectó el USB?');
+    } finally {
+      reader.releaseLock(); reader = null;
+    }
+  }
+  try { if (port) await port.close(); } catch (_) {}
+  port = null;
+  setStatus('Desconectado');
+  $('btnConnect').textContent = 'Conectar placa';
+}
+
+async function disconnect() {
+  keepReading = false;
+  if (reader) { try { await reader.cancel(); } catch (_) {} }
+}
+
+function startDemo() {
+  if (port) return;
+  setStatus('Modo demo (datos simulados)', 'demo');
+  $('btnDemo').textContent = 'Detener demo';
+  let t = 0;
+  demoTimer = setInterval(() => {
+    t++;
+    const temp = 30.7 + Math.sin(t / 20) * 0.6 + (Math.random() - .5) * .1;
+    const hum = 58 + Math.sin(t / 13) * 2 + (Math.random() - .5) * .4;
+    const st = temp + 3;
+    const ppm = 35 + Math.sin(t / 30) * 5 + (Math.random() - .5);
+    handleLine(`Temp: ${temp.toFixed(1)} C  Hum: ${hum.toFixed(1)} %  ST: ${st.toFixed(1)} C  | MQ135: 0.39 V  Rs: 118.5 k  ppm~: ${Math.round(ppm)}  (R0 calib: 184.9 k)`);
+  }, 1000);
+}
+function stopDemo() {
+  if (!demoTimer) return;
+  clearInterval(demoTimer); demoTimer = null;
+  $('btnDemo').textContent = 'Modo demo';
+  for (const k in series) { series[k] = []; stats[k] = {}; }
+  count = 0; $('log').textContent = '';
+  setStatus('Desconectado');
+}
+
+$('btnConnect').onclick = () => (port ? disconnect() : connect());
+$('btnDemo').onclick = () => (demoTimer ? stopDemo() : startDemo());
+window.addEventListener('resize', drawAll);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawAll);
+if (!('serial' in navigator)) banner('Para conectar la placa abre esta página en Google Chrome o Microsoft Edge. Mientras tanto puedes probar el "Modo demo".');
+drawAll();
+</script>
+</body>
+</html>
